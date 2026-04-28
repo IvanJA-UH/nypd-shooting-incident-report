@@ -1,0 +1,232 @@
+---
+title: "NYPD Shooting Incident Data Report"
+author: "Ivan Jimenez- Acosta"
+date: "2026-04-28"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r install_packages}
+install.packages("tidyverse", repos = "https://cloud.r-project.org")
+install.packages("lubridate", repos = "https://cloud.r-project.org")
+```
+
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(lubridate)
+```
+
+## Introduction
+
+This project looks at reported shooting incidents in New York City using the NYPD Shooting Incident Data. I am mainly interested in when and where these incidents appear most often, and whether some simple patterns show up across boroughs, time, and victim information. This report imports the data, cleans it into a more useful form, creates visualizations, fits a simple model, and discusses some limits and possible bias in the analysis.
+
+## Importing the Data
+
+```{r import_data}
+shooting_raw <- read_csv("https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD")
+
+shooting_raw
+```
+
+## First Look at the Data
+
+Before cleaning the data, I wanted to check the size of the file and the range of dates included in it.
+
+```{r first_look}
+glimpse(shooting_raw)
+head(shooting_raw)
+```
+
+## Tidying the Data
+
+The original file has useful information, but some of the variables need to be cleaned before analysis. I changed the date and time variables into usable formats, created year and hour variables, and replaced some `"(null)"` values with real missing values.
+
+```{r clean_data}
+shooting <- shooting_raw %>%
+  mutate(
+    OCCUR_DATE = mdy(OCCUR_DATE),
+    OCCUR_TIME = hms(OCCUR_TIME),
+    year = year(OCCUR_DATE),
+    month = month(OCCUR_DATE, label = TRUE),
+    hour = hour(OCCUR_TIME),
+    
+    PERP_AGE_GROUP = na_if(PERP_AGE_GROUP, "(null)"),
+    PERP_SEX = na_if(PERP_SEX, "(null)"),
+    PERP_RACE = na_if(PERP_RACE, "(null)"),
+    VIC_AGE_GROUP = na_if(VIC_AGE_GROUP, "(null)"),
+    VIC_SEX = na_if(VIC_SEX, "(null)"),
+    VIC_RACE = na_if(VIC_RACE, "(null)"),
+    
+    BORO = as.factor(BORO),
+    PRECINCT = as.factor(PRECINCT),
+    STATISTICAL_MURDER_FLAG = as.factor(STATISTICAL_MURDER_FLAG),
+    VIC_AGE_GROUP = as.factor(VIC_AGE_GROUP),
+    VIC_SEX = as.factor(VIC_SEX),
+    VIC_RACE = as.factor(VIC_RACE)
+  ) %>%
+  select(
+    INCIDENT_KEY,
+    OCCUR_DATE,
+    OCCUR_TIME,
+    year,
+    month,
+    hour,
+    BORO,
+    PRECINCT,
+    LOC_OF_OCCUR_DESC,
+    LOC_CLASSFCTN_DESC,
+    LOCATION_DESC,
+    STATISTICAL_MURDER_FLAG,
+    PERP_AGE_GROUP,
+    PERP_SEX,
+    PERP_RACE,
+    VIC_AGE_GROUP,
+    VIC_SEX,
+    VIC_RACE,
+    Latitude,
+    Longitude
+  )
+
+shooting
+```
+
+## Missing Values
+
+Some parts of this dataset are much more complete than others. The incident key, date, time, borough, precinct, victim age group, victim sex, and victim race do not have missing values in this cleaned dataset. The biggest missing areas are location details and perpetrator information. `LOC_OF_OCCUR_DESC` and `LOC_CLASSFCTN_DESC` each have 25,596 missing values, and `LOCATION_DESC` has 14,977 missing values. The perpetrator variables also have many missing values, with about 10,900 missing values for perpetrator age group, sex, and race. I kept these rows because removing them would remove many useful incidents, but I will be careful when interpreting those variables.
+
+```{r missing_values}
+missing_summary <- shooting %>%
+  summarize(across(everything(), ~ sum(is.na(.)))) %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = "variable",
+    values_to = "missing_count"
+  ) %>%
+  arrange(desc(missing_count))
+
+missing_summary
+```
+
+## Basic Summaries
+
+Before making graphs, I looked at a few simple summaries. This helps show what is in the dataset and gives a starting point for the analysis.
+
+```{r borough_summary}
+shooting %>%
+  count(BORO, sort = TRUE)
+```
+Brooklyn has the highest number of reported shooting incidents in this dataset, followed by the Bronx. Staten Island has the lowest count by a large margin. These are raw totals, so they show the number of recorded incidents, not the rate of shootings after adjusting for population size.
+
+```{r year_summary}
+shooting %>%
+  count(year) %>%
+  arrange(year)
+```
+
+The year summary shows that the number of reported shootings changes across time instead of staying constant. The early years in the table have higher counts than some later years, but I will use the graph below to make the pattern easier to see.
+
+```{r murder_summary}
+shooting %>%
+  count(STATISTICAL_MURDER_FLAG) %>%
+  mutate(percent = round(n / sum(n) * 100, 2))
+```
+
+Most reported shooting incidents in the dataset were not classified as murders. About 19.38% were classified as murders, while about 80.62% were not. This matters because the dataset includes both fatal and nonfatal shooting incidents, not only homicides.
+
+## Visualization 1: Shootings by Borough
+
+```{r plot_borough}
+shooting %>%
+  count(BORO) %>%
+  ggplot(aes(x = reorder(BORO, n), y = n)) +
+  geom_col() +
+  coord_flip() +
+  labs(
+    title = "Reported Shooting Incidents by Borough",
+    x = "Borough",
+    y = "Number of Incidents"
+  )
+```
+This graph makes the borough differences easier to see than the table. Brooklyn has the highest number of reported shooting incidents, followed by the Bronx. Staten Island has far fewer incidents than the other boroughs. This is useful as a first comparison, but it is still based on raw counts, so it does not adjust for population size.
+
+## Visualization 2: Shootings Over Time
+
+```{r plot_year}
+shooting %>%
+  count(year) %>%
+  ggplot(aes(x = year, y = n)) +
+  geom_line() +
+  geom_point() +
+  labs(
+    title = "Reported Shooting Incidents Over Time",
+    x = "Year",
+    y = "Number of Incidents"
+  )
+```
+
+The time trend shows that reported shooting incidents fell through the mid and late 2010s, then increased sharply around 2020 and 2021. After that, the count drops again in the most recent years shown. This raises an important question about what changed around 2020, but this dataset alone cannot explain the cause.
+
+## Visualization 3: Shootings by Hour of Day
+
+```{r plot_hour}
+shooting %>%
+  filter(!is.na(hour)) %>%
+  count(hour) %>%
+  ggplot(aes(x = hour, y = n)) +
+  geom_col() +
+  labs(
+    title = "Reported Shooting Incidents by Hour of Day",
+    x = "Hour of Day",
+    y = "Number of Incidents"
+  )
+```
+
+The hour graph shows a clear time-of-day pattern. Reported shootings are lowest in the morning hours and rise later in the day, with the highest counts at night and around midnight. This suggests that time of day is an important pattern in the dataset, even though it does not explain why the incidents happened.
+
+## Model
+
+For the model, I looked at whether an incident being classified as a murder is related to the hour of the incident and the borough. This is a simple model, so I am using it to describe patterns in the data, not to claim that hour or borough causes an incident to be fatal.
+
+```{r model_data}
+model_data <- shooting %>%
+  filter(
+    !is.na(STATISTICAL_MURDER_FLAG),
+    !is.na(hour),
+    !is.na(BORO)
+  ) %>%
+  mutate(
+    murder = if_else(STATISTICAL_MURDER_FLAG == "TRUE", 1, 0)
+  )
+
+model_data
+```
+
+```{r murder_model}
+murder_model <- glm(
+  murder ~ hour + BORO,
+  data = model_data,
+  family = binomial
+)
+
+summary(murder_model)
+```
+
+The model does not show a strong relationship between hour and whether the incident was classified as a murder. The hour coefficient is very close to zero, and the p-value is large. Most borough coefficients are also not statistically significant. Manhattan is the only borough shown as significant in this model, with lower estimated odds compared with the reference borough. This means the model is useful as a basic check, but hour and borough alone do not explain much of the difference between fatal and nonfatal shooting incidents.
+
+## Bias
+
+There are several potential sources of bias for this project. The first that comes to mind is reporting bias. This dataset only includes shooting incidents recorded by the NYPD, making the analysis dependent on how incidents were reported, classified, and entered into the system. If reporting practices changed over time, this could potentially affect yearly trends.
+
+The lack of complete data is another issue. Perpetrator variables have many missing values, which led me to not use them reliably for this assignment. If I used cases containing only complete perpetrator information, the results could be biased toward incidents where more information was readily available.
+
+Bias exists in the raw count number as well. The borough graph identified Brooklyn and the Bronx as having a higher number of reported shootings without accounting for population size. A larger borough may have more incidents simply due to a larger population. A more thorough analysis would compare shooting rates through population data.
+
+
+## Conclusion
+
+This project helped show the main patterns in the NYPD Shooting Incident Data after the file was cleaned and organized. Brooklyn and the Bronx had the highest number of reported incidents, while Staten Island had far fewer. The yearly trend also stood out because reported shootings declined through much of the 2010s, then rose sharply around 2020 and 2021.
+
+The time-of-day graph showed one of the clearest patterns in the project. Reported shootings were lower in the morning and more common later in the day and at night. The model was less useful than the graphs, but it still showed something important: hour and borough by themselves do not explain much about whether an incident was classified as a murder.
+
+This report is useful as a first look, but it is not enough to fully explain shooting patterns in New York City. While the dataset provides information about the time and location of recorded shootings, it does not contain enough variables. Future studies and analyses should include variables like population numbers, neighborhood data, and additional information about the reporting process.
